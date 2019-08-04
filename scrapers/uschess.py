@@ -6,9 +6,9 @@ from html.parser import HTMLParser
 from collections import namedtuple
 import csv
 import numpy as np
+import string
 
-
-def scrape_players(saving=True):
+def scrape_players(saving=False):
     base_url = 'http://www.uschess.org/assets/msa_joomla/MbrLst.php?*,*;'
     NUM_PAGES = 10003
     BAD_WORDS = ['Dupl', '(  )']
@@ -86,7 +86,7 @@ def list_of_tournaments(df=None):
                     tournaments.append(tourn)
 
         # currently for QA purposes
-        if count == 50:
+        if count == 10:
             return tournaments
     return tournaments
 
@@ -191,12 +191,66 @@ def scrape_tournament(tournament_id):
 
         return players
 
-    return parse_table(table, spaces_per_entry)
+    def clean_up_parse(players):
+        
+        df = pandas.DataFrame(players)
+        num_players = df.seed.astype(int).max()
+        
+        df2 = df.copy(deep=True)
+        
+
+
+
+        def parse_df_row(row):
+            game = namedtuple('game', ['my_id', 'opponent_id', 'my_rating', 'opponent_rating', 'result', 'time_control'])
+            #index = range(num_players)
+            #games = pandas.DataFrame(index=index, columns=columns)
+            games = []
+            for result in row.results:
+                opp_seed = result.strip(string.ascii_letters)
+                opponents_frame = df2[df2.seed == opp_seed]
+                my_id = row.id
+                
+                try:
+                    opp_id = opponents_frame.id.values[0]
+                except IndexError:
+                    opp_id = 'NaN'
+                my_rating = row.progression.split('->')[0]
+                try:
+                    opp_rating = opponents_frame.progression.values[0].split('->')[0]
+                except IndexError:
+                    opp_rating = 'NaN'
+                if 'R' in my_rating:
+                    my_rating = my_rating.strip('R')
+                    opp_rating.strip('R')
+                    time_control = 'standard'
+                elif 'Q' in my_rating:
+                    my_rating.strip('Q')
+                    opp_rating.strip('Q')
+                    time_control = 'quick'
+                    
+                if 'W' in result:
+                    score = 1.0
+                elif 'L' in result:
+                    score = 0.0
+                else:
+                    score = 0.5
+                
+                games.append(game(my_id, opp_id, my_rating, opp_rating, score, time_control))
+            row.results = games
+            row.progression = row.progression.strip('RQ)')
+            return row
+
+            
+            #return games
+
+        df = df.apply(parse_df_row, axis=1)
+
+        return df
+
+
+    return clean_up_parse(parse_table(table, spaces_per_entry))
 
 
 if __name__ == "__main__":
-    tournies = list_of_tournaments()
-    for tourn in tournies:
-        t = scrape_tournament(tourn)
-        for x in t:
-            print(x)
+    pass
