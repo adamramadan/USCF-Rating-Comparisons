@@ -8,43 +8,44 @@ import csv
 import numpy as np
 import string
 
-def scrape_players(saving=False):
+
+def scrape_players(start=1, stop=10003, saving=False, out_dir=None):
     base_url = 'http://www.uschess.org/assets/msa_joomla/MbrLst.php?*,*;'
-    NUM_PAGES = 10003
+    NUM_PAGES = stop
+
+    HEADERS_ROW = 2
+    NUM_FIELDS_BEFORE_NAME = 6
+
     BAD_WORDS = ['Dupl', '(  )']
 
     players = []
 
-
-
     for page in range(1, NUM_PAGES+1):
-        print(page)
         data = requests.get(
             base_url + str(page))
 
         soup = BeautifulSoup(data.text, 'lxml')
-        rows = soup.find('pre').text.split('\n') # player table is a <pre> object, should be single on page
+        # player table is a <pre> object, should be single on page
+        rows = soup.find('pre').text.split('\n')
         for i in range(len(rows)-1, -1, -1):
             if any(word in rows[i] for word in BAD_WORDS):
                 del rows[i]
                 continue
             rows[i] = rows[i].split()
 
-        rows = rows[2:]  # trim top headers of table
-        del rows[-1]  # empty list on last element
-
-        NUM_FIELDS_BEFORE_NAME = 6
+        rows = rows[HEADERS_ROW:]  # trim top headers of table
+        if rows[-1] == []:
+            del rows[-1] # seems to be an empty list on last element
 
         for i in range(len(rows)):
-            temp = rows[i][:NUM_FIELDS_BEFORE_NAME] 
+            temp = rows[i][:NUM_FIELDS_BEFORE_NAME]
             temp.extend([''.join(rows[i][NUM_FIELDS_BEFORE_NAME:])])
             players.append(temp)
 
-    df = pandas.DataFrame(players)
-    df.columns = ['ID', 'State', 'Exp Date', 'Reg', 'Quick', 'Blitz', 'Name']
-    
+    df = pandas.DataFrame(players, index=len(players), columns = ['ID', 'State', 'Exp Date', 'Reg', 'Quick', 'Blitz', 'Name'])
+
     if saving:
-        df.to_pickle('data\\player_data.pkl')
+        df.to_pickle(out_dir + 'player_data.pkl')
 
     return df
 
@@ -58,9 +59,9 @@ def list_of_tournaments(df=None):
     """
 
     df = pandas.read_pickle(
-        'C:\\Users\\AdamsPC\\Projects\\USCF-Rating-Comparisons\\data\\player_data.pkl')
+        'C:\\Users\\AdamsPC\\Projects\\USCF-Rating-Comparisons\\data\\players_df.pkl')
     base_url = "http://www.uschess.org/msa/MbrDtlTnmtHst.php?"
-    ids = [x for x in df.ID]
+    ids = [x for x in df.id]
 
     TOURN_OFFSET = 10  # row.text returns something like '2015-03-8201503089742'
     # where first 10 chars are date
@@ -86,69 +87,49 @@ def list_of_tournaments(df=None):
                     tournaments.append(tourn)
 
         # currently for QA purposes
-        if count == 10:
-            return tournaments
+        check_point = 1000
+        if count % check_point == 0:
+            np.save(str(count)+'_tournaments', tournaments)
+
+    np.save('data\\tournaments\\all_tournaments.npy', tournaments)
+
     return tournaments
 
 
 def scrape_tournament(tournament_id):
+    unwanted_chars = ''.join(
+        [x for x in tournament_id if x not in string.digits])
 
+    tournament_id = tournament_id.strip(unwanted_chars)
     tournament_id = str(int(tournament_id))
     base_url = 'http://www.uschess.org/assets/msa_joomla/XtblMain.php?'
 
-    url = base_url + tournament_id + '.0' # .0 flag flattens tournament into one section
+    # .0 flag flattens tournament into one section
+    url = base_url + tournament_id + '.0'
 
     data = requests.get(url)
     soup = BeautifulSoup(data.text, 'lxml')
 
     table = soup.find('pre')
 
+    if table is None:
+        return table
+
     table = table.text.split('\n')
 
-    def trim_and_examine_table(table):
-        dotted_rows = ['-------' in x for x in table]
-        for idx in range(len(dotted_rows) - 1, -1, -1):
-            if dotted_rows[idx]:
-                end_of_table = idx - 1
-                break
-        count = 0
-        for idx in range(0, len(dotted_rows)):
-            if dotted_rows[idx]:
-                count += 1
-                if count == 3:
-                    start_of_table = idx + 1
-                    break
-
-        table = table[start_of_table:end_of_table]
-        dotted_rows = dotted_rows[start_of_table:end_of_table]
-
-        time_since_last_bar = 0
-        spaces = []
-        for i in range(len(dotted_rows)):
-            if dotted_rows[i]:
-                spaces.append(time_since_last_bar)
-                time_since_last_bar = 0
-            else:
-                time_since_last_bar += 1
-
-        spaces_per_entry = np.round(np.mean(spaces)).astype(np.int32)
-
-        while spaces[-1] != spaces_per_entry:
-            del table[-spaces[-1]-1:]
-            del spaces[-1]
-
-        return table, spaces_per_entry
-
-    table, spaces_per_entry = trim_and_examine_table(table)
-
-    def parse_table(table, rows_per_entry):
-        rows = [x for x in table]
+    def parse_table(table):
+        player = namedtuple(
+            'player', ['id', 'placement', 'score', 'progression', 'results'])
+        players = []
 
         def parse_name_row(row):
             row = row.replace(' ', '').split('|')
             possible_results = ('W', 'L', 'D')
             seed = row[0]
-            score = row[2]
+            try:
+                score = row[2]
+            except IndexError:
+                pdb.set_trace()
             results = []
             for x in row[3:]:
                 if any(result in x for result in possible_results):
@@ -162,95 +143,194 @@ def scrape_tournament(tournament_id):
             row = row[1].split(':')
 
             ID = row[0]
-            progression = row[1]
 
+            try:
+                progression = row[1]
+            except IndexError:
+                progression = 'NaN'
             return state, ID, progression
 
-        player = namedtuple(
-            'player', ['id', 'seed', 'score', 'progression', 'results'])
+        found_pair = False
+        found_num = False
 
-        players = []
+        for i in range(len(table)-1):
+            if 'Pair' in table[i]:
+                found_pair = True
+            if 'Num' in table[i+1]:
+                found_num = True
+                num_idx = i+1
+                # num_col = table[i+1].find('Num')
+                if found_pair and found_num:
+                    break
+            else:
+                found_pair = False
 
-        for i in range(0, len(table)):
+        if found_pair and found_num:
+            start_of_table = num_idx
 
-            for_modulo = i
-            if for_modulo % (rows_per_entry+1) == 0:
-                seed, score, results = parse_name_row(rows[i])
-            elif for_modulo % (rows_per_entry+1) == 1:
-                _, ID, progression = parse_id_row(rows[i])
+        else:
+            return None
+
+        table = table[start_of_table:]
+
+        printing = 0
+        if printing:
+            for x in table:
+                print(x)
+        current_placement = 1
+        for i in range(len(table)):
+            # placement should be around 0->8
+
+            if str(current_placement) in table[i][:8]:
+                split = table[i].split('|')
+                if ['F' in col for col in split[2:]][0]:
+
+                    current_placement += 1
+                    continue
+                if 'NOSHOW/UNKNOWN' in table[i]:
+                    current_placement += 1
+                    continue
+                needed_chars = 'RQB'
+                if not any(char in table[i+1] for char in needed_chars):
+                    continue
+                seed, score, results = parse_name_row(table[i])
+                _, ID, progression = parse_id_row(table[i+1])
                 if 'R' in ID:
                     ID = ID.strip('R')
                     progression = 'R ' + progression
                 elif 'Q' in ID:
                     ID = ID.strip('Q')
                     progression = 'Q ' + progression
+                elif 'B' in ID:
+                    ID = ID.strip('B')
+                    progression = 'B' + progression
                 temp_player = player(ID, seed, score, progression, results)
                 players.append(temp_player)
-            else:
-                continue
+                current_placement += 1
+                i += 1
 
         return players
 
+    # needed a quick container for players and games
+    # a bit messy but it will suffice for now
+    class Player():
+        def __init__(self, ID, placement, score, progression, results):
+            self.ID = ID
+            self.placement = placement
+            self.score = score
+            self.progression = progression
+            self.results = results
+
+    class Game():
+        def __init__(self, my_id, opp_id, my_rating, opp_rating, result, time_control):
+            self.my_id = my_id
+            self.opp_id = opp_id
+            self.my_rating = my_rating
+            self.opp_rating = opp_rating
+            self.result = result
+            self.time_control = time_control
+
+
     def clean_up_parse(players):
-        
-        df = pandas.DataFrame(players)
-        num_players = df.seed.astype(int).max()
-        
-        df2 = df.copy(deep=True)
-        
+        new_players = []  # testing to see if this works
+        for i in range(len(players)):
+            new_players.append(Player(*players[i]))
+        # df = pandas.DataFrame(players
+        # num_players = df.seed.astype(int).max()
 
+        players = new_players
 
+        game_t = namedtuple('game_t', [
+            'my_id', 'opponent_id', 'my_rating', 'opponent_rating', 'result', 'time_control'])
 
-        def parse_df_row(row):
-            game = namedtuple('game', ['my_id', 'opponent_id', 'my_rating', 'opponent_rating', 'result', 'time_control'])
-            #index = range(num_players)
-            #games = pandas.DataFrame(index=index, columns=columns)
+        player_t = namedtuple(
+            'player_t', ['ID', 'placement', 'score', 'progression', 'games'])
+
+        for i in range(len(players)):
             games = []
-            for result in row.results:
-                opp_seed = result.strip(string.ascii_letters)
-                opponents_frame = df2[df2.seed == opp_seed]
-                my_id = row.id
-                
+            for j in range(len(players[i].results)):
+                opp_idx = players[i].results[j].strip(string.ascii_letters)
+                for k in range(len(players)):
+                    if opp_idx == players[k].placement:
+                        opp = players[k]
                 try:
-                    opp_id = opponents_frame.id.values[0]
-                except IndexError:
-                    opp_id = 'NaN'
-                my_rating = row.progression.split('->')[0]
-                try:
-                    opp_rating = opponents_frame.progression.values[0].split('->')[0]
-                except IndexError:
-                    opp_rating = 'NaN'
+                    test = opp
+                except UnboundLocalError:
+                    # games.append(None)
+                    continue
+                my_id = players[i].ID.strip()
+                opp_id = opp.ID.strip()
+                my_rating = players[i].progression.split('->')[0]
+                opp_rating = opp.progression.split('->')[0]
+
                 if 'R' in my_rating:
                     my_rating = my_rating.strip('R')
-                    opp_rating.strip('R')
+                    opp_rating = opp_rating.strip('R')
                     time_control = 'standard'
+
                 elif 'Q' in my_rating:
-                    my_rating.strip('Q')
-                    opp_rating.strip('Q')
+                    my_rating = my_rating.strip('Q')
+                    opp_rating = opp_rating.strip('Q')
                     time_control = 'quick'
-                    
-                if 'W' in result:
-                    score = 1.0
-                elif 'L' in result:
-                    score = 0.0
+
+                elif 'B' in my_rating:
+                    my_rating = my_rating.strip('B')
+                    opp_rating = opp_rating.strip('Q')
+                    time_control = 'blitz'
+
                 else:
+                    time_control = 'unknown'
+
+                if 'W' in players[i].results[j]:
+                    score = 1.0
+                elif 'L' in players[i].results[j]:
+                    score = 0.0
+                elif 'D' in players[i].results[j]:
                     score = 0.5
-                
-                games.append(game(my_id, opp_id, my_rating, opp_rating, score, time_control))
-            row.results = games
-            row.progression = row.progression.strip('RQ)')
-            return row
+                else:
+                    score = 'NaN'
 
-            
-            #return games
+                game = Game(my_id, opp_id, my_rating,
+                            opp_rating, score, time_control)
 
-        df = df.apply(parse_df_row, axis=1)
+                games.append(game)
 
-        return df
+            game_tuples = []
+
+            for j in range(len(games)):
+                game_tuples.append(game_t(games[j].my_id, games[j].opp_id, games[j].my_rating,
+                                          games[j].opp_rating, games[j].result, games[j].time_control))
 
 
-    return clean_up_parse(parse_table(table, spaces_per_entry))
+            setattr(players[i], 'games', pandas.DataFrame(game_tuples))
+
+        players_t = []
+
+        for i in range(len(players)):
+            players_t.append(player_t(
+                players[i].ID, players[i].placement, players[i].score, players[i].progression, players[i].games))
+
+        return pandas.DataFrame(players_t)
+
+    return clean_up_parse(parse_table(table))
 
 
 if __name__ == "__main__":
-    pass
+
+    # 139574
+
+    tournaments = np.load('397000_tournaments.npy')
+    # tournaments = [tournaments[283]]
+    tourn_data = []
+
+    out_dir = "C:\\Users\AdamsPC\\Projects\\USCF-Rating-Comparisons\\data\\tournaments\\tournament_results\\397\\"
+
+    for i in range(139574, len(tournaments)):
+        tournaments[i] = tournaments[i].strip(
+            ''.join([char for char in tournaments[i] if char not in string.digits]))
+        print(tournaments[i])
+        data = scrape_tournament(tournaments[i])
+        try:
+            data.to_pickle(out_dir+tournaments[i]+'.pkl')
+        except AttributeError:
+            continue
