@@ -7,7 +7,7 @@ player_state_dict = np.array(np.load(data_path), ndmin=1)[0]
 
 tourny_path = 'C:\\Users\\AdamsPC\\Projects\\USCF-Rating-Comparisons\\data\\tournaments\\tournament_results\\397\\'
 
-out_dir =  'C:\\Users\\AdamsPC\\Projects\\USCF-Rating-Comparisons\\data\\games\\slimmed_games\\'
+out_dir = 'C:\\Users\\AdamsPC\\Projects\\USCF-Rating-Comparisons\\data\\games\\slimmed_games\\'
 
 files = os.listdir(tourny_path)
 all_games = []
@@ -17,15 +17,15 @@ for f in files:
 
     df = pandas.read_pickle(tourny_path+f)
 
-    if not df.games.empty:
-        for i in range(df.shape[0]):
-            if not df.games[i].empty:
-                temp = df.games[i].to_numpy().tolist()
-                tourn_id = f.strip('.pkl')
-                for j in range(len(temp)):
-                    temp[j].append(tourn_id)
-                all_games.append(temp)
-
+    if not df.empty:
+        if not df.games.empty:
+            for i in range(df.shape[0]):
+                if not df.games[i].empty:
+                    temp = df.games[i].to_numpy().tolist()
+                    tourn_id = f.strip('.pkl')
+                    for j in range(len(temp)):
+                        temp[j].append(tourn_id)
+                    all_games.append(temp)
 
 
 all_games = np.vstack(all_games).tolist()
@@ -48,15 +48,17 @@ for i in range(len(all_games)):
     all_games[i].append(my_state)
     all_games[i].append(opp_state)
 
-all_games = pandas.DataFrame(all_games, index=range(len(all_games)), columns=['id_a', 'id_b', 'rating_a', 'rating_b', 'result', 'time_control', 'tourny_id', 'state_a', 'state_b'])
-new_cols = ['state_a', 'state_b', 'rating_a', 'rating_b', 'result', 'time_control', 'tourny_id']
+all_games = pandas.DataFrame(all_games, index=range(len(all_games)), columns=[
+                             'id_a', 'id_b', 'rating_a', 'rating_b', 'result', 'time_control', 'tourny_id', 'state_a', 'state_b'])
+new_cols = ['state_a', 'state_b', 'rating_a',
+            'rating_b', 'result', 'time_control', 'tourny_id']
 all_games = all_games[new_cols]
 
-slimmed_games = all_games[['state_a', 'state_b', 'rating_a', 'rating_b', 'result', 'tourny_id']]
+slimmed_games = all_games[['state_a', 'state_b',
+                           'rating_a', 'rating_b', 'result', 'tourny_id']]
 
 length = slimmed_games.shape[0]
 
 slimmed_games.to_pickle(out_dir+str(length)+'.pkl')
 
 # trim states
-

@@ -35,14 +35,15 @@ def scrape_players(start=1, stop=10003, saving=False, out_dir=None):
 
         rows = rows[HEADERS_ROW:]  # trim top headers of table
         if rows[-1] == []:
-            del rows[-1] # seems to be an empty list on last element
+            del rows[-1]  # seems to be an empty list on last element
 
         for i in range(len(rows)):
             temp = rows[i][:NUM_FIELDS_BEFORE_NAME]
             temp.extend([''.join(rows[i][NUM_FIELDS_BEFORE_NAME:])])
             players.append(temp)
 
-    df = pandas.DataFrame(players, index=len(players), columns = ['ID', 'State', 'Exp Date', 'Reg', 'Quick', 'Blitz', 'Name'])
+    df = pandas.DataFrame(players, index=len(players), columns=[
+                          'ID', 'State', 'Exp Date', 'Reg', 'Quick', 'Blitz', 'Name'])
 
     if saving:
         df.to_pickle(out_dir + 'player_data.pkl')
@@ -230,7 +231,6 @@ def scrape_tournament(tournament_id):
             self.result = result
             self.time_control = time_control
 
-
     def clean_up_parse(players):
         new_players = []  # testing to see if this works
         for i in range(len(players)):
@@ -300,7 +300,6 @@ def scrape_tournament(tournament_id):
             for j in range(len(games)):
                 game_tuples.append(game_t(games[j].my_id, games[j].opp_id, games[j].my_rating,
                                           games[j].opp_rating, games[j].result, games[j].time_control))
-
 
             setattr(players[i], 'games', pandas.DataFrame(game_tuples))
 
