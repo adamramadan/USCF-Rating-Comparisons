@@ -8,39 +8,44 @@ import csv
 import numpy as np
 import string
 
-
+# FIXME R's reader read_table function can replace most of this function
 def scrape_players(start=1, stop=10003, saving=False, out_dir=None):
     base_url = 'http://www.uschess.org/assets/msa_joomla/MbrLst.php?*,*;'
     NUM_PAGES = stop
-
     HEADERS_ROW = 2
     NUM_FIELDS_BEFORE_NAME = 6
 
     BAD_WORDS = ['Dupl', '(  )']
 
-    players = []
-
-    for page in range(1, NUM_PAGES+1):
-        data = requests.get(
-            base_url + str(page))
+    def scrape_player_page(page):
+        data = requests.get(base_url + str(page))
 
         soup = BeautifulSoup(data.text, 'lxml')
+
         # player table is a <pre> object, should be single on page
+        test_table = pandas.read_csv(soup.find('pre').text)
+        print(test_table)
         rows = soup.find('pre').text.split('\n')
-        for i in range(len(rows)-1, -1, -1):
-            if any(word in rows[i] for word in BAD_WORDS):
-                del rows[i]
+        for idx, row in enumerate(rows):
+            if any(word in row for word in BAD_WORDS):
+                del rows[idx]
                 continue
-            rows[i] = rows[i].split()
+            rows[idx] = rows[idx].split()
 
         rows = rows[HEADERS_ROW:]  # trim top headers of table
         if rows[-1] == []:
             del rows[-1]  # seems to be an empty list on last element
 
-        for i in range(len(rows)):
-            temp = rows[i][:NUM_FIELDS_BEFORE_NAME]
-            temp.extend([''.join(rows[i][NUM_FIELDS_BEFORE_NAME:])])
-            players.append(temp)
+        for row in rows:
+            temp = row[:NUM_FIELDS_BEFORE_NAME]
+            temp.extend([''.join(row[NUM_FIELDS_BEFORE_NAME:])])
+
+        return temp
+
+    players = []
+
+    for page in range(1, NUM_PAGES+1):
+        players.extend(scrape_player_page(page))
 
     df = pandas.DataFrame(players, index=len(players), columns=[
                           'ID', 'State', 'Exp Date', 'Reg', 'Quick', 'Blitz', 'Name'])
@@ -51,28 +56,25 @@ def scrape_players(start=1, stop=10003, saving=False, out_dir=None):
     return df
 
 
-def list_of_tournaments(df=None):
+def create_tournament_list(df_path, saving=False, out_dir=None):
     """for player name in dataset, go to tournament history page,
         for each tournament they played in,
         if that tournament is not in our tournament database,
         append it
         Leaves us with full list of tournament IDs for later parser
     """
+    
+    df = pandas.read_pickle(df_path)
 
-    df = pandas.read_pickle(
-        'C:\\Users\\AdamsPC\\Projects\\USCF-Rating-Comparisons\\data\\players_df.pkl')
     base_url = "http://www.uschess.org/msa/MbrDtlTnmtHst.php?"
-    ids = [x for x in df.id]
+    ids = (x for x in df.id)
 
     TOURN_OFFSET = 10  # row.text returns something like '2015-03-8201503089742'
     # where first 10 chars are date
 
     tournaments = []
     count = 1
-    for ID in ids:
-        print(count)
-        count += 1
-
+    for count, ID in enumerate(ids):
         url = base_url + ID
 
         data = requests.get(url)
@@ -92,12 +94,13 @@ def list_of_tournaments(df=None):
         if count % check_point == 0:
             np.save(str(count)+'_tournaments', tournaments)
 
-    np.save('data\\tournaments\\all_tournaments.npy', tournaments)
+    if saving:
+        np.save(out_dir + 'all_tournaments.npy', tournaments)
 
     return tournaments
 
 
-def scrape_tournament(tournament_id):
+def scrape_tournament(tournament_id, matches=None):
     unwanted_chars = ''.join(
         [x for x in tournament_id if x not in string.digits])
 
@@ -111,6 +114,10 @@ def scrape_tournament(tournament_id):
     data = requests.get(url)
     soup = BeautifulSoup(data.text, 'lxml')
 
+    if matches:
+        if not any([word in soup.text for word in matches]):
+            return None
+
     table = soup.find('pre')
 
     if table is None:
@@ -118,29 +125,35 @@ def scrape_tournament(tournament_id):
 
     table = table.text.split('\n')
 
-    def parse_table(table):
+    def raw_parse_table(table):
         player = namedtuple(
             'player', ['id', 'placement', 'score', 'progression', 'results'])
         players = []
 
         def parse_name_row(row):
+            SEED_IDX = 0
+            SCORE_IDX = 2
+            GAMES_IDX_START = 3
             row = row.replace(' ', '').split('|')
             possible_results = ('W', 'L', 'D')
-            seed = row[0]
+            seed = row[SEED_IDX]
             try:
-                score = row[2]
+                score = row[SCORE_IDX]
             except IndexError:
                 pdb.set_trace()
             results = []
-            for x in row[3:]:
+            for x in row[GAMES_IDX_START:]:
                 if any(result in x for result in possible_results):
                     results.append(x)
             return seed, score, results
 
         def parse_id_row(row):
+            STATE_IDX = 0
 
             row = row.replace(' /', '').split('|')
-            state = row[0]
+
+            state = row[STATE_IDX]
+
             row = row[1].split(':')
 
             ID = row[0]
@@ -179,9 +192,10 @@ def scrape_tournament(tournament_id):
             for x in table:
                 print(x)
         current_placement = 1
-        for i in range(len(table)):
-            # placement should be around 0->8
 
+        i_iter = iter(range(len(table)))
+        for i in i_iter:  # while loop here because we increment i later
+            # placement should be around 0->8
             if str(current_placement) in table[i][:8]:
                 split = table[i].split('|')
                 if ['F' in col for col in split[2:]][0]:
@@ -208,7 +222,7 @@ def scrape_tournament(tournament_id):
                 temp_player = player(ID, seed, score, progression, results)
                 players.append(temp_player)
                 current_placement += 1
-                i += 1
+                i_iter.__next__()
 
         return players
 
@@ -231,10 +245,9 @@ def scrape_tournament(tournament_id):
             self.result = result
             self.time_control = time_control
 
-    def clean_up_parse(players):
-        new_players = []  # testing to see if this works
-        for i in range(len(players)):
-            new_players.append(Player(*players[i]))
+    def clean_up_raw_parse(players):
+        new_players = [Player(*player) for player in players]
+
         # df = pandas.DataFrame(players
         # num_players = df.seed.astype(int).max()
 
@@ -246,21 +259,22 @@ def scrape_tournament(tournament_id):
         player_t = namedtuple(
             'player_t', ['ID', 'placement', 'score', 'progression', 'games'])
 
-        for i in range(len(players)):
+        for p_idx, player in enumerate(players):
             games = []
-            for j in range(len(players[i].results)):
-                opp_idx = players[i].results[j].strip(string.ascii_letters)
-                for k in range(len(players)):
+            for result in player.results:
+                opp_idx = result.strip(string.ascii_letters)
+                for k, _ in enumerate(players):
                     if opp_idx == players[k].placement:
                         opp = players[k]
+
                 try:
                     test = opp
                 except UnboundLocalError:
-                    # games.append(None)
                     continue
-                my_id = players[i].ID.strip()
+
+                my_id = player.ID.strip()
                 opp_id = opp.ID.strip()
-                my_rating = players[i].progression.split('->')[0]
+                my_rating = player.progression.split('->')[0]
                 opp_rating = opp.progression.split('->')[0]
 
                 if 'R' in my_rating:
@@ -281,12 +295,15 @@ def scrape_tournament(tournament_id):
                 else:
                     time_control = 'unknown'
 
-                if 'W' in players[i].results[j]:
+                if 'W' in result:
                     score = 1.0
-                elif 'L' in players[i].results[j]:
+
+                elif 'L' in result:
                     score = 0.0
-                elif 'D' in players[i].results[j]:
+
+                elif 'D' in result:
                     score = 0.5
+
                 else:
                     score = 'NaN'
 
@@ -297,39 +314,30 @@ def scrape_tournament(tournament_id):
 
             game_tuples = []
 
-            for j in range(len(games)):
-                game_tuples.append(game_t(games[j].my_id, games[j].opp_id, games[j].my_rating,
-                                          games[j].opp_rating, games[j].result, games[j].time_control))
+            for game in games:
+                game_tuples.append(game_t(game.my_id, game.opp_id, game.my_rating,
+                                          game.opp_rating, game.result, game.time_control))
 
-            setattr(players[i], 'games', pandas.DataFrame(game_tuples))
+            setattr(players[p_idx], 'games', pandas.DataFrame(game_tuples))
 
         players_t = []
 
-        for i in range(len(players)):
+        for player in players:
             players_t.append(player_t(
-                players[i].ID, players[i].placement, players[i].score, players[i].progression, players[i].games))
+                player.ID, player.placement, player.score, player.progression, player.games))
 
         return pandas.DataFrame(players_t)
 
-    return clean_up_parse(parse_table(table))
+    return clean_up_raw_parse(raw_parse_table(table))
 
 
-if __name__ == "__main__":
-
-    # 139574
-
-    tournaments = np.load('397000_tournaments.npy')
-    # tournaments = [tournaments[283]]
-    tourn_data = []
-
-    out_dir = "C:\\Users\AdamsPC\\Projects\\USCF-Rating-Comparisons\\data\\tournaments\\tournament_results\\397\\"
-
-    for i in range(139574, len(tournaments)):
-        tournaments[i] = tournaments[i].strip(
-            ''.join([char for char in tournaments[i] if char not in string.digits]))
-        print(tournaments[i])
-        data = scrape_tournament(tournaments[i])
+def create_tournament_games(tournaments, out_dir, matches, tournament_path):
+    for idx, tournament in enumerate(tournaments):
+        tournaments[idx] = tournaments[idx].strip(
+            ''.join([char for char in tournaments[idx] if char not in string.digits]))
+        data = scrape_tournament(tournaments[idx], matches=matches)
         try:
-            data.to_pickle(out_dir+tournaments[i]+'.pkl')
+            data.to_pickle(out_dir+tournaments[idx]+matches[0]+'.pkl')
+
         except AttributeError:
             continue

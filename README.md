@@ -27,3 +27,29 @@ compare states script (the main script to analyze the objective of the project)
 
 ## data
 Folder for data
+
+Usage Example
+```
+import elo_location_comparison as elc
+
+out_dir = 'path/to/data/'
+
+#scrapes 10 pages of player data to outdir in pickle named 'player_data.pkl
+scrape_players(start=1, stop=10, saving=True, out_dir=out_dir)
+
+saves tournaments to 'all_tournaments.npy')
+tournaments = create_tournament_list(out_dir+'player_data.pkl', saving=True, out_dir=out_dir)
+
+city_variable_names = ['NEW YORK,NY', 'NEW YORK, NY'] # check tournament page for possible matches
+tournament_games = create_tournament_games(out_dir, matches, out_dir+'all_tournaments.npy')
+
+#save tournament games in a pkl
+create_games_df(tournaments, out_dir+'tournament_games'/, city_variable_names, tournament_path)
+
+slimmed_games = elc.tournament_to_games.create_games_df(out_dir+'tournament_games/', out_dir+'slimmed_games/')
+spread, _ = elc.compare_states.calculate_spread(out_dir+'slimmed_games/' + states_to_compare='NY')
+print(spread.head(3))
+#NY   AL   .03
+#NY   AK   -.02
+#NY   AZ   .04
+```
